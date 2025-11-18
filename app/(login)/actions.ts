@@ -9,6 +9,7 @@ import {
   teams,
   teamMembers,
   activityLogs,
+  integrationKeys,
   type NewUser,
   type NewTeam,
   type NewTeamMember,
@@ -25,6 +26,10 @@ import {
   validatedAction,
   validatedActionWithUser
 } from '@/lib/auth/middleware';
+import {
+  INTEGRATION_KEY_MAX_LENGTH,
+  integrationKeyNames
+} from '@/lib/integrations/keys';
 
 async function logActivity(
   teamId: number | null | undefined,
@@ -200,6 +205,11 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     await logActivity(teamId, createdUser.id, ActivityType.CREATE_TEAM);
   }
 
+  await db
+    .insert(integrationKeys)
+    .values({ teamId })
+    .onConflictDoNothing({ target: integrationKeys.teamId });
+
   const newTeamMember: NewTeamMember = {
     userId: createdUser.id,
     teamId: teamId,
@@ -355,6 +365,95 @@ export const updateAccount = validatedActionWithUser(
     ]);
 
     return { name, success: 'Account updated successfully.' };
+  }
+);
+
+const integrationKeyValueSchema = z
+  .string()
+  .max(
+    INTEGRATION_KEY_MAX_LENGTH,
+    `API keys must be ${INTEGRATION_KEY_MAX_LENGTH} characters or fewer`
+  )
+  .optional();
+
+const integrationKeysSchema = z.object({
+  agenticaApiKey: integrationKeyValueSchema,
+  agenticaDeepCoderApiKey: integrationKeyValueSchema,
+  codeRabbitApi: integrationKeyValueSchema,
+  cognitiveComputationsDolphinMistralApiKey: integrationKeyValueSchema,
+  elevenLabsApiKey: integrationKeyValueSchema,
+  geminiApiKey: integrationKeyValueSchema,
+  githubApiKey: integrationKeyValueSchema,
+  glm45ApiKey: integrationKeyValueSchema,
+  grokXApiKey: integrationKeyValueSchema,
+  hermesLlamaApiKey: integrationKeyValueSchema,
+  kimiDevMoonshotApiKey: integrationKeyValueSchema,
+  microsoftAiCoderApiKey: integrationKeyValueSchema,
+  minimaxApiKey: integrationKeyValueSchema,
+  mistralAiApiKey: integrationKeyValueSchema,
+  mistralAiDevStrallApiKey: integrationKeyValueSchema,
+  nvidiaNematronNanoApiKey: integrationKeyValueSchema,
+  qwen25Coder32InstructApiKey: integrationKeyValueSchema,
+  qwenApiKey: integrationKeyValueSchema,
+  qwen3CoderApiKey: integrationKeyValueSchema,
+  tngTechDeepSeekApiKey: integrationKeyValueSchema,
+  xApiKey: integrationKeyValueSchema
+});
+
+export const updateIntegrationKeys = validatedActionWithUser(
+  integrationKeysSchema,
+  async (data, _, user) => {
+    const userWithTeam = await getUserWithTeam(user.id);
+
+    if (!userWithTeam?.teamId) {
+      return { error: 'You need to belong to a team to manage integrations.' };
+    }
+
+    if (user.role !== 'owner') {
+      return { error: 'Only team owners can update integration keys.' };
+    }
+
+    const normalizedEntries = integrationKeyNames.map((field) => {
+      const rawValue = data[field];
+      if (typeof rawValue !== 'string') {
+        return [field, null] as const;
+      }
+      const trimmed = rawValue.trim();
+      return [field, trimmed.length ? trimmed : null] as const;
+    });
+
+    const payload = Object.fromEntries(normalizedEntries) as Partial<
+      typeof integrationKeys.$inferInsert
+    >;
+
+    const existing = await db
+      .select()
+      .from(integrationKeys)
+      .where(eq(integrationKeys.teamId, userWithTeam.teamId))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(integrationKeys)
+        .set({
+          ...payload,
+          updatedAt: new Date()
+        })
+        .where(eq(integrationKeys.teamId, userWithTeam.teamId));
+    } else {
+      await db.insert(integrationKeys).values({
+        teamId: userWithTeam.teamId,
+        ...payload
+      });
+    }
+
+    await logActivity(
+      userWithTeam.teamId,
+      user.id,
+      ActivityType.UPDATE_INTEGRATIONS
+    );
+
+    return { success: 'Integration keys saved successfully.' };
   }
 );
 

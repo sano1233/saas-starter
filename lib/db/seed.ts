@@ -1,6 +1,6 @@
 import { stripe } from '../payments/stripe';
 import { db } from './drizzle';
-import { users, teams, teamMembers } from './schema';
+import { users, teams, teamMembers, integrationKeys } from './schema';
 import { hashPassword } from '@/lib/auth/session';
 
 async function createStripeProducts() {
@@ -63,6 +63,10 @@ async function seed() {
       name: 'Test Team',
     })
     .returning();
+
+    await db.insert(integrationKeys).values({
+      teamId: team.id,
+    });
 
   await db.insert(teamMembers).values({
     teamId: team.id,
