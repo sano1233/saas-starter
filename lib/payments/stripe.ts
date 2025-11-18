@@ -7,9 +7,74 @@ import {
   updateTeamSubscription
 } from '@/lib/db/queries';
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-04-30.basil'
-});
+type ProductSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  defaultPriceId?: string;
+};
+
+type PriceSummary = {
+  id: string;
+  productId: string;
+  unitAmount: number;
+  currency: string;
+  interval?: string;
+  trialPeriodDays?: number;
+};
+
+const FALLBACK_PRODUCTS: ProductSummary[] = [
+  {
+    id: 'prod_base',
+    name: 'Base',
+    description: 'Base subscription plan',
+    defaultPriceId: 'price_base'
+  },
+  {
+    id: 'prod_plus',
+    name: 'Plus',
+    description: 'Plus subscription plan',
+    defaultPriceId: 'price_plus'
+  }
+];
+
+const FALLBACK_PRICES: PriceSummary[] = [
+  {
+    id: 'price_base',
+    productId: 'prod_base',
+    unitAmount: 800,
+    currency: 'usd',
+    interval: 'month',
+    trialPeriodDays: 14
+  },
+  {
+    id: 'price_plus',
+    productId: 'prod_plus',
+    unitAmount: 1200,
+    currency: 'usd',
+    interval: 'month',
+    trialPeriodDays: 14
+  }
+];
+
+let stripeClient: Stripe | null = null;
+
+export function getStripeClient() {
+  if (stripeClient) {
+    return stripeClient;
+  }
+
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) {
+    throw new Error('STRIPE_SECRET_KEY environment variable is not set');
+  }
+
+  stripeClient = new Stripe(secretKey, {
+    apiVersion: '2025-04-30.basil'
+  });
+
+  return stripeClient;
+}
 
 export async function createCheckoutSession({
   team,
@@ -18,6 +83,7 @@ export async function createCheckoutSession({
   team: Team | null;
   priceId: string;
 }) {
+  const stripe = getStripeClient();
   const user = await getUser();
 
   if (!team || !user) {
@@ -51,6 +117,7 @@ export async function createCustomerPortalSession(team: Team) {
     redirect('/pricing');
   }
 
+  const stripe = getStripeClient();
   let configuration: Stripe.BillingPortal.Configuration;
   const configurations = await stripe.billingPortal.configurations.list();
 
@@ -147,36 +214,54 @@ export async function handleSubscriptionChange(
 }
 
 export async function getStripePrices() {
-  const prices = await stripe.prices.list({
-    expand: ['data.product'],
-    active: true,
-    type: 'recurring'
-  });
+  try {
+    const stripe = getStripeClient();
+    const prices = await stripe.prices.list({
+      expand: ['data.product'],
+      active: true,
+      type: 'recurring'
+    });
 
-  return prices.data.map((price) => ({
-    id: price.id,
-    productId:
-      typeof price.product === 'string' ? price.product : price.product.id,
-    unitAmount: price.unit_amount,
-    currency: price.currency,
-    interval: price.recurring?.interval,
-    trialPeriodDays: price.recurring?.trial_period_days
-  }));
+    return prices.data.map((price) => ({
+      id: price.id,
+      productId:
+        typeof price.product === 'string' ? price.product : price.product.id,
+      unitAmount: price.unit_amount ?? 0,
+      currency: price.currency,
+      interval: price.recurring?.interval,
+      trialPeriodDays: price.recurring?.trial_period_days ?? undefined
+    }));
+  } catch (error) {
+    console.warn(
+      'Unable to load Stripe prices. Falling back to default pricing data.',
+      error
+    );
+    return FALLBACK_PRICES;
+  }
 }
 
 export async function getStripeProducts() {
-  const products = await stripe.products.list({
-    active: true,
-    expand: ['data.default_price']
-  });
+  try {
+    const stripe = getStripeClient();
+    const products = await stripe.products.list({
+      active: true,
+      expand: ['data.default_price']
+    });
 
-  return products.data.map((product) => ({
-    id: product.id,
-    name: product.name,
-    description: product.description,
-    defaultPriceId:
-      typeof product.default_price === 'string'
-        ? product.default_price
-        : product.default_price?.id
-  }));
+    return products.data.map((product) => ({
+      id: product.id,
+      name: product.name,
+      description: product.description,
+      defaultPriceId:
+        typeof product.default_price === 'string'
+          ? product.default_price
+          : product.default_price?.id ?? undefined
+    }));
+  } catch (error) {
+    console.warn(
+      'Unable to load Stripe products. Falling back to default product data.',
+      error
+    );
+    return FALLBACK_PRODUCTS;
+  }
 }
