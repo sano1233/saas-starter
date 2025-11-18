@@ -54,6 +54,39 @@ export const activityLogs = pgTable('activity_logs', {
   ipAddress: varchar('ip_address', { length: 45 }),
 });
 
+export const integrationKeys = pgTable('integration_keys', {
+  id: serial('id').primaryKey(),
+  teamId: integer('team_id')
+    .notNull()
+    .references(() => teams.id)
+    .unique(),
+  agenticaApiKey: text('agentica_api_key'),
+  agenticaDeepCoderApiKey: text('agentica_deep_coder_api_key'),
+  codeRabbitApi: text('code_rabbit_api'),
+  cognitiveComputationsDolphinMistralApiKey: text(
+    'cognitive_computations_dolphin_mistral_api_key'
+  ),
+  elevenLabsApiKey: text('eleven_labs_api_key'),
+  geminiApiKey: text('gemini_api_key'),
+  githubApiKey: text('github_api_key'),
+  glm45ApiKey: text('glm_45_api_key'),
+  grokXApiKey: text('grok_x_api_key'),
+  hermesLlamaApiKey: text('hermes_llama_api_key'),
+  kimiDevMoonshotApiKey: text('kimi_dev_moonshot_api_key'),
+  microsoftAiCoderApiKey: text('microsoft_ai_coder_api_key'),
+  minimaxApiKey: text('minimax_api_key'),
+  mistralAiApiKey: text('mistral_ai_api_key'),
+  mistralAiDevStrallApiKey: text('mistral_ai_dev_strall_api_key'),
+  nvidiaNematronNanoApiKey: text('nvidia_nematron_nano_api_key'),
+  qwen25Coder32InstructApiKey: text('qwen_25_coder_32_instruct_api_key'),
+  qwenApiKey: text('qwen_api_key'),
+  qwen3CoderApiKey: text('qwen3_coder_api_key'),
+  tngTechDeepSeekApiKey: text('tng_tech_deep_seek_api_key'),
+  xApiKey: text('x_api_key'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 export const invitations = pgTable('invitations', {
   id: serial('id').primaryKey(),
   teamId: integer('team_id')
@@ -122,6 +155,8 @@ export type ActivityLog = typeof activityLogs.$inferSelect;
 export type NewActivityLog = typeof activityLogs.$inferInsert;
 export type Invitation = typeof invitations.$inferSelect;
 export type NewInvitation = typeof invitations.$inferInsert;
+export type IntegrationKeys = typeof integrationKeys.$inferSelect;
+export type NewIntegrationKeys = typeof integrationKeys.$inferInsert;
 export type TeamDataWithMembers = Team & {
   teamMembers: (TeamMember & {
     user: Pick<User, 'id' | 'name' | 'email'>;
@@ -139,4 +174,5 @@ export enum ActivityType {
   REMOVE_TEAM_MEMBER = 'REMOVE_TEAM_MEMBER',
   INVITE_TEAM_MEMBER = 'INVITE_TEAM_MEMBER',
   ACCEPT_INVITATION = 'ACCEPT_INVITATION',
+  UPDATE_INTEGRATIONS = 'UPDATE_INTEGRATIONS',
 }

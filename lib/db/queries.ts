@@ -1,6 +1,12 @@
 import { desc, and, eq, isNull } from 'drizzle-orm';
 import { db } from './drizzle';
-import { activityLogs, teamMembers, teams, users } from './schema';
+import {
+  activityLogs,
+  integrationKeys,
+  teamMembers,
+  teams,
+  users
+} from './schema';
 import { cookies } from 'next/headers';
 import { verifyToken } from '@/lib/auth/session';
 
@@ -127,4 +133,23 @@ export async function getTeamForUser() {
   });
 
   return result?.team || null;
+}
+
+export async function getIntegrationKeysForTeam(teamId: number) {
+  const result = await db
+    .select()
+    .from(integrationKeys)
+    .where(eq(integrationKeys.teamId, teamId))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : null;
+}
+
+export async function getIntegrationKeysForCurrentUser() {
+  const team = await getTeamForUser();
+  if (!team) {
+    return null;
+  }
+
+  return getIntegrationKeysForTeam(team.id);
 }
