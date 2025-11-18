@@ -39,6 +39,13 @@ function SubscriptionSkeleton() {
 
 function ManageSubscription() {
   const { data: teamData } = useSWR<TeamDataWithMembers>('/api/team', fetcher);
+  const status = teamData?.subscriptionStatus?.toLowerCase();
+  const statusLabel =
+    status === 'active' || status === 'completed'
+      ? 'Billed monthly'
+      : status === 'trialing'
+      ? 'Trial period'
+      : 'No active subscription';
 
   return (
     <Card className="mb-8">
@@ -52,13 +59,7 @@ function ManageSubscription() {
               <p className="font-medium">
                 Current Plan: {teamData?.planName || 'Free'}
               </p>
-              <p className="text-sm text-muted-foreground">
-                {teamData?.subscriptionStatus === 'active'
-                  ? 'Billed monthly'
-                  : teamData?.subscriptionStatus === 'trialing'
-                  ? 'Trial period'
-                  : 'No active subscription'}
-              </p>
+                <p className="text-sm text-muted-foreground">{statusLabel}</p>
             </div>
             <form action={customerPortalAction}>
               <Button type="submit" variant="outline">
