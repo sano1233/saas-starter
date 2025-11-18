@@ -1,76 +1,55 @@
-import { stripe } from '../payments/stripe';
-import { db } from './drizzle';
-import { users, teams, teamMembers } from './schema';
 import { hashPassword } from '@/lib/auth/session';
+import { getSupabaseServerClient } from '@/lib/supabase/server';
 
-async function createStripeProducts() {
-  console.log('Creating Stripe products and prices...');
-
-  const baseProduct = await stripe.products.create({
-    name: 'Base',
-    description: 'Base subscription plan',
-  });
-
-  await stripe.prices.create({
-    product: baseProduct.id,
-    unit_amount: 800, // $8 in cents
-    currency: 'usd',
-    recurring: {
-      interval: 'month',
-      trial_period_days: 7,
-    },
-  });
-
-  const plusProduct = await stripe.products.create({
-    name: 'Plus',
-    description: 'Plus subscription plan',
-  });
-
-  await stripe.prices.create({
-    product: plusProduct.id,
-    unit_amount: 1200, // $12 in cents
-    currency: 'usd',
-    recurring: {
-      interval: 'month',
-      trial_period_days: 7,
-    },
-  });
-
-  console.log('Stripe products and prices created successfully.');
-}
+const supabase = getSupabaseServerClient();
 
 async function seed() {
   const email = 'test@test.com';
   const password = 'admin123';
   const passwordHash = await hashPassword(password);
 
-  const [user] = await db
-    .insert(users)
-    .values([
-      {
-        email: email,
-        passwordHash: passwordHash,
-        role: "owner",
-      },
-    ])
-    .returning();
+  const { data: existingUser } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
 
-  console.log('Initial user created.');
+  if (existingUser) {
+    console.log('Seed user already exists. Skipping user creation.');
+    return;
+  }
 
-  const [team] = await db
-    .insert(teams)
-    .values({
-      name: 'Test Team',
+  const { data: createdUser, error: userError } = await supabase
+    .from('users')
+    .insert({
+      email,
+      password_hash: passwordHash,
+      role: 'owner'
     })
-    .returning();
+    .select('id')
+    .single();
 
-  await db.insert(teamMembers).values({
-    teamId: team.id,
-    userId: user.id,
-    role: 'owner',
+  if (userError || !createdUser) {
+    throw userError || new Error('Failed to create user');
+  }
+
+  const { data: team, error: teamError } = await supabase
+    .from('teams')
+    .insert({ name: 'Test Team' })
+    .select('id')
+    .single();
+
+  if (teamError || !team) {
+    throw teamError || new Error('Failed to create team');
+  }
+
+  await supabase.from('team_members').insert({
+    team_id: team.id,
+    user_id: createdUser.id,
+    role: 'owner'
   });
 
-  await createStripeProducts();
+  console.log('Seed data created successfully.');
 }
 
 seed()
