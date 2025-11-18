@@ -8,6 +8,12 @@ dotenv.config();
 let clientInstance: ReturnType<typeof postgres> | undefined;
 let dbInstance: ReturnType<typeof drizzle> | undefined;
 
+/**
+ * Obtain the singleton PostgreSQL client, creating it on first access.
+ *
+ * @returns The PostgreSQL client instance
+ * @throws If the `POSTGRES_URL` environment variable is not set
+ */
 function getClient() {
   if (!clientInstance) {
     if (!process.env.POSTGRES_URL) {
@@ -18,6 +24,13 @@ function getClient() {
   return clientInstance;
 }
 
+/**
+ * Get the singleton drizzle-wrapped database instance.
+ *
+ * Initializes the instance on first call and returns the cached instance on subsequent calls.
+ *
+ * @returns The drizzle ORM database instance
+ */
 function getDb() {
   if (!dbInstance) {
     dbInstance = drizzle(getClient(), { schema });
