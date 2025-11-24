@@ -6,6 +6,9 @@ import { SubmitButton } from './submit-button';
 // Prices are fresh for one hour max
 export const revalidate = 3600;
 
+// Force dynamic rendering to avoid build-time Stripe API calls
+export const dynamic = 'force-dynamic';
+
 export default async function PricingPage() {
   const [prices, products] = await Promise.all([
     getStripePrices(),

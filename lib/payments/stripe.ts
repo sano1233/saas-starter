@@ -7,8 +7,32 @@ import {
   updateTeamSubscription
 } from '@/lib/db/queries';
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-04-30.basil'
+let stripeInstance: Stripe | undefined;
+
+function getStripe() {
+  if (!stripeInstance) {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw new Error('STRIPE_SECRET_KEY environment variable is not set');
+    }
+    stripeInstance = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: '2025-04-30.basil'
+    });
+  }
+  return stripeInstance;
+}
+
+// Lazy initialization using Proxy to maintain backward compatibility
+// The Stripe client is only created when actually accessed at runtime
+export const stripe = new Proxy({} as Stripe, {
+  get: (_, prop) => {
+    const actualStripe = getStripe();
+    const value = actualStripe[prop as keyof typeof actualStripe];
+    if (typeof value === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (value as any).bind(actualStripe);
+    }
+    return value;
+  }
 });
 
 export async function createCheckoutSession({
