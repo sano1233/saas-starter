@@ -1,11 +1,11 @@
 import Stripe from 'stripe';
 import { redirect } from 'next/navigation';
-import { Team } from '@/lib/db/schema';
+import { Team } from '@/lib/supabase/queries';
 import {
   getTeamByStripeCustomerId,
   getUser,
-  updateTeamSubscription
-} from '@/lib/db/queries';
+  updateTeamSubscription,
+} from '@/lib/supabase/queries';
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-04-30.basil'
@@ -36,7 +36,7 @@ export async function createCheckoutSession({
     success_url: `${process.env.BASE_URL}/api/stripe/checkout?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${process.env.BASE_URL}/pricing`,
     customer: team.stripeCustomerId || undefined,
-    client_reference_id: user.id.toString(),
+    client_reference_id: user.id,
     allow_promotion_codes: true,
     subscription_data: {
       trial_period_days: 14

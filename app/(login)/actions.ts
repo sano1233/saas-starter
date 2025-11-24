@@ -1,216 +1,170 @@
 'use server';
 
 import { z } from 'zod';
-import { and, eq, sql } from 'drizzle-orm';
-import { db } from '@/lib/db/drizzle';
+import { createClient } from '@/lib/supabase/server';
 import {
-  User,
-  users,
-  teams,
-  teamMembers,
-  activityLogs,
-  type NewUser,
-  type NewTeam,
-  type NewTeamMember,
-  type NewActivityLog,
   ActivityType,
-  invitations
-} from '@/lib/db/schema';
-import { comparePasswords, hashPassword, setSession } from '@/lib/auth/session';
+  logActivity,
+  getUser,
+  getUserWithTeam,
+  type User,
+  type Team,
+} from '@/lib/supabase/queries';
 import { redirect } from 'next/navigation';
-import { cookies } from 'next/headers';
+import { revalidatePath } from 'next/cache';
 import { createCheckoutSession } from '@/lib/payments/stripe';
-import { getUser, getUserWithTeam } from '@/lib/db/queries';
 import {
   validatedAction,
-  validatedActionWithUser
+  validatedActionWithUser,
 } from '@/lib/auth/middleware';
-
-async function logActivity(
-  teamId: number | null | undefined,
-  userId: number,
-  type: ActivityType,
-  ipAddress?: string
-) {
-  if (teamId === null || teamId === undefined) {
-    return;
-  }
-  const newActivity: NewActivityLog = {
-    teamId,
-    userId,
-    action: type,
-    ipAddress: ipAddress || ''
-  };
-  await db.insert(activityLogs).values(newActivity);
-}
 
 const signInSchema = z.object({
   email: z.string().email().min(3).max(255),
-  password: z.string().min(8).max(100)
+  password: z.string().min(8).max(100),
 });
 
 export const signIn = validatedAction(signInSchema, async (data, formData) => {
   const { email, password } = data;
+  const supabase = await createClient();
 
-  const userWithTeam = await db
-    .select({
-      user: users,
-      team: teams
-    })
-    .from(users)
-    .leftJoin(teamMembers, eq(users.id, teamMembers.userId))
-    .leftJoin(teams, eq(teamMembers.teamId, teams.id))
-    .where(eq(users.email, email))
-    .limit(1);
+  const { data: authData, error: authError } =
+    await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-  if (userWithTeam.length === 0) {
+  if (authError || !authData.user) {
     return {
       error: 'Invalid email or password. Please try again.',
       email,
-      password
+      password,
     };
   }
 
-  const { user: foundUser, team: foundTeam } = userWithTeam[0];
+  // Get team info
+  const { data: teamMember } = await supabase
+    .from('team_members')
+    .select('team_id, teams(*)')
+    .eq('user_id', authData.user.id)
+    .single();
 
-  const isPasswordValid = await comparePasswords(
-    password,
-    foundUser.passwordHash
-  );
+  const team = teamMember?.teams as any;
 
-  if (!isPasswordValid) {
-    return {
-      error: 'Invalid email or password. Please try again.',
-      email,
-      password
-    };
-  }
-
-  await Promise.all([
-    setSession(foundUser),
-    logActivity(foundTeam?.id, foundUser.id, ActivityType.SIGN_IN)
-  ]);
+  await logActivity(team?.id, authData.user.id, ActivityType.SIGN_IN);
 
   const redirectTo = formData.get('redirect') as string | null;
   if (redirectTo === 'checkout') {
     const priceId = formData.get('priceId') as string;
-    return createCheckoutSession({ team: foundTeam, priceId });
+    return createCheckoutSession({ team, priceId });
   }
 
+  revalidatePath('/', 'layout');
   redirect('/dashboard');
 });
 
 const signUpSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
-  inviteId: z.string().optional()
+  inviteId: z.string().optional(),
 });
 
 export const signUp = validatedAction(signUpSchema, async (data, formData) => {
   const { email, password, inviteId } = data;
+  const supabase = await createClient();
 
-  const existingUser = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
+  // Check if there's a valid invitation
+  let invitation: any = null;
+  if (inviteId) {
+    const { data: invData } = await supabase
+      .from('invitations')
+      .select('*')
+      .eq('id', parseInt(inviteId))
+      .eq('email', email)
+      .eq('status', 'pending')
+      .single();
 
-  if (existingUser.length > 0) {
-    return {
-      error: 'Failed to create user. Please try again.',
-      email,
-      password
-    };
+    invitation = invData;
+
+    if (!invitation) {
+      return { error: 'Invalid or expired invitation.', email, password };
+    }
   }
 
-  const passwordHash = await hashPassword(password);
-
-  const newUser: NewUser = {
+  // Sign up the user
+  const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
-    passwordHash,
-    role: 'owner' // Default role, will be overridden if there's an invitation
-  };
+    password,
+    options: {
+      data: {
+        name: email.split('@')[0], // Use email prefix as default name
+      },
+    },
+  });
 
-  const [createdUser] = await db.insert(users).values(newUser).returning();
-
-  if (!createdUser) {
+  if (authError || !authData.user) {
     return {
       error: 'Failed to create user. Please try again.',
       email,
-      password
+      password,
     };
   }
 
   let teamId: number;
   let userRole: string;
-  let createdTeam: typeof teams.$inferSelect | null = null;
+  let createdTeam: Team | null = null;
 
-  if (inviteId) {
-    // Check if there's a valid invitation
-    const [invitation] = await db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.id, parseInt(inviteId)),
-          eq(invitations.email, email),
-          eq(invitations.status, 'pending')
-        )
-      )
-      .limit(1);
+  if (invitation) {
+    // Join existing team
+    teamId = invitation.team_id;
+    userRole = invitation.role;
 
-    if (invitation) {
-      teamId = invitation.teamId;
-      userRole = invitation.role;
+    await supabase
+      .from('invitations')
+      .update({ status: 'accepted' })
+      .eq('id', invitation.id);
 
-      await db
-        .update(invitations)
-        .set({ status: 'accepted' })
-        .where(eq(invitations.id, invitation.id));
+    await logActivity(teamId, authData.user.id, ActivityType.ACCEPT_INVITATION);
 
-      await logActivity(teamId, createdUser.id, ActivityType.ACCEPT_INVITATION);
+    const { data: teamData } = await supabase
+      .from('teams')
+      .select('*')
+      .eq('id', teamId)
+      .single();
 
-      [createdTeam] = await db
-        .select()
-        .from(teams)
-        .where(eq(teams.id, teamId))
-        .limit(1);
-    } else {
-      return { error: 'Invalid or expired invitation.', email, password };
-    }
+    createdTeam = teamData;
   } else {
-    // Create a new team if there's no invitation
-    const newTeam: NewTeam = {
-      name: `${email}'s Team`
-    };
+    // Create a new team
+    const { data: teamData, error: teamError } = await supabase
+      .from('teams')
+      .insert({
+        name: `${email}'s Team`,
+      })
+      .select()
+      .single();
 
-    [createdTeam] = await db.insert(teams).values(newTeam).returning();
-
-    if (!createdTeam) {
+    if (teamError || !teamData) {
       return {
         error: 'Failed to create team. Please try again.',
         email,
-        password
+        password,
       };
     }
 
-    teamId = createdTeam.id;
+    createdTeam = teamData;
+    teamId = teamData.id;
     userRole = 'owner';
 
-    await logActivity(teamId, createdUser.id, ActivityType.CREATE_TEAM);
+    await logActivity(teamId, authData.user.id, ActivityType.CREATE_TEAM);
   }
 
-  const newTeamMember: NewTeamMember = {
-    userId: createdUser.id,
-    teamId: teamId,
-    role: userRole
-  };
+  // Add user to team
+  await supabase.from('team_members').insert({
+    user_id: authData.user.id,
+    team_id: teamId,
+    role: userRole,
+  });
 
-  await Promise.all([
-    db.insert(teamMembers).values(newTeamMember),
-    logActivity(teamId, createdUser.id, ActivityType.SIGN_UP),
-    setSession(createdUser)
-  ]);
+  await logActivity(teamId, authData.user.id, ActivityType.SIGN_UP);
 
   const redirectTo = formData.get('redirect') as string | null;
   if (redirectTo === 'checkout') {
@@ -218,20 +172,28 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     return createCheckoutSession({ team: createdTeam, priceId });
   }
 
+  revalidatePath('/', 'layout');
   redirect('/dashboard');
 });
 
 export async function signOut() {
-  const user = (await getUser()) as User;
+  const user = await getUser();
+  if (!user) return;
+
   const userWithTeam = await getUserWithTeam(user.id);
   await logActivity(userWithTeam?.teamId, user.id, ActivityType.SIGN_OUT);
-  (await cookies()).delete('session');
+
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+
+  revalidatePath('/', 'layout');
+  redirect('/sign-in');
 }
 
 const updatePasswordSchema = z.object({
   currentPassword: z.string().min(8).max(100),
   newPassword: z.string().min(8).max(100),
-  confirmPassword: z.string().min(8).max(100)
+  confirmPassword: z.string().min(8).max(100),
 });
 
 export const updatePassword = validatedActionWithUser(
@@ -239,26 +201,12 @@ export const updatePassword = validatedActionWithUser(
   async (data, _, user) => {
     const { currentPassword, newPassword, confirmPassword } = data;
 
-    const isPasswordValid = await comparePasswords(
-      currentPassword,
-      user.passwordHash
-    );
-
-    if (!isPasswordValid) {
-      return {
-        currentPassword,
-        newPassword,
-        confirmPassword,
-        error: 'Current password is incorrect.'
-      };
-    }
-
     if (currentPassword === newPassword) {
       return {
         currentPassword,
         newPassword,
         confirmPassword,
-        error: 'New password must be different from the current password.'
+        error: 'New password must be different from the current password.',
       };
     }
 
@@ -267,41 +215,93 @@ export const updatePassword = validatedActionWithUser(
         currentPassword,
         newPassword,
         confirmPassword,
-        error: 'New password and confirmation password do not match.'
+        error: 'New password and confirmation password do not match.',
       };
     }
 
-    const newPasswordHash = await hashPassword(newPassword);
-    const userWithTeam = await getUserWithTeam(user.id);
+    const supabase = await createClient();
 
-    await Promise.all([
-      db
-        .update(users)
-        .set({ passwordHash: newPasswordHash })
-        .where(eq(users.id, user.id)),
-      logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_PASSWORD)
-    ]);
+    // Verify current password by trying to sign in
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    if (!authUser?.email) {
+      return {
+        currentPassword,
+        newPassword,
+        confirmPassword,
+        error: 'User not found.',
+      };
+    }
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: authUser.email,
+      password: currentPassword,
+    });
+
+    if (signInError) {
+      return {
+        currentPassword,
+        newPassword,
+        confirmPassword,
+        error: 'Current password is incorrect.',
+      };
+    }
+
+    // Update password
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (updateError) {
+      return {
+        currentPassword,
+        newPassword,
+        confirmPassword,
+        error: 'Failed to update password.',
+      };
+    }
+
+    const userWithTeam = await getUserWithTeam(user.id);
+    await logActivity(
+      userWithTeam?.teamId,
+      user.id,
+      ActivityType.UPDATE_PASSWORD
+    );
 
     return {
-      success: 'Password updated successfully.'
+      success: 'Password updated successfully.',
     };
   }
 );
 
 const deleteAccountSchema = z.object({
-  password: z.string().min(8).max(100)
+  password: z.string().min(8).max(100),
 });
 
 export const deleteAccount = validatedActionWithUser(
   deleteAccountSchema,
   async (data, _, user) => {
     const { password } = data;
+    const supabase = await createClient();
 
-    const isPasswordValid = await comparePasswords(password, user.passwordHash);
-    if (!isPasswordValid) {
+    // Verify password
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    if (!authUser?.email) {
+      return { password, error: 'User not found.' };
+    }
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: authUser.email,
+      password,
+    });
+
+    if (signInError) {
       return {
         password,
-        error: 'Incorrect password. Account deletion failed.'
+        error: 'Incorrect password. Account deletion failed.',
       };
     }
 
@@ -313,53 +313,59 @@ export const deleteAccount = validatedActionWithUser(
       ActivityType.DELETE_ACCOUNT
     );
 
-    // Soft delete
-    await db
-      .update(users)
-      .set({
-        deletedAt: sql`CURRENT_TIMESTAMP`,
-        email: sql`CONCAT(email, '-', id, '-deleted')` // Ensure email uniqueness
+    // Soft delete the profile
+    await supabase
+      .from('profiles')
+      .update({
+        deleted_at: new Date().toISOString(),
       })
-      .where(eq(users.id, user.id));
+      .eq('id', user.id);
 
+    // Remove from team
     if (userWithTeam?.teamId) {
-      await db
-        .delete(teamMembers)
-        .where(
-          and(
-            eq(teamMembers.userId, user.id),
-            eq(teamMembers.teamId, userWithTeam.teamId)
-          )
-        );
+      await supabase
+        .from('team_members')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('team_id', userWithTeam.teamId);
     }
 
-    (await cookies()).delete('session');
+    await supabase.auth.signOut();
     redirect('/sign-in');
   }
 );
 
 const updateAccountSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
-  email: z.string().email('Invalid email address')
+  email: z.string().email('Invalid email address'),
 });
 
 export const updateAccount = validatedActionWithUser(
   updateAccountSchema,
   async (data, _, user) => {
     const { name, email } = data;
-    const userWithTeam = await getUserWithTeam(user.id);
+    const supabase = await createClient();
 
-    await Promise.all([
-      db.update(users).set({ name, email }).where(eq(users.id, user.id)),
-      logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_ACCOUNT)
-    ]);
+    // Update profile
+    await supabase.from('profiles').update({ name }).eq('id', user.id);
+
+    // Update email in auth.users
+    if (email !== user.email) {
+      const { error } = await supabase.auth.updateUser({ email });
+      if (error) {
+        return { error: 'Failed to update email.' };
+      }
+    }
+
+    const userWithTeam = await getUserWithTeam(user.id);
+    await logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_ACCOUNT);
 
     return { name, success: 'Account updated successfully.' };
   }
 );
 
 const removeTeamMemberSchema = z.object({
-  memberId: z.number()
+  memberId: z.number(),
 });
 
 export const removeTeamMember = validatedActionWithUser(
@@ -372,14 +378,13 @@ export const removeTeamMember = validatedActionWithUser(
       return { error: 'User is not part of a team' };
     }
 
-    await db
-      .delete(teamMembers)
-      .where(
-        and(
-          eq(teamMembers.id, memberId),
-          eq(teamMembers.teamId, userWithTeam.teamId)
-        )
-      );
+    const supabase = await createClient();
+
+    await supabase
+      .from('team_members')
+      .delete()
+      .eq('id', memberId)
+      .eq('team_id', userWithTeam.teamId);
 
     await logActivity(
       userWithTeam.teamId,
@@ -393,7 +398,7 @@ export const removeTeamMember = validatedActionWithUser(
 
 const inviteTeamMemberSchema = z.object({
   email: z.string().email('Invalid email address'),
-  role: z.enum(['member', 'owner'])
+  role: z.enum(['member', 'owner']),
 });
 
 export const inviteTeamMember = validatedActionWithUser(
@@ -406,43 +411,39 @@ export const inviteTeamMember = validatedActionWithUser(
       return { error: 'User is not part of a team' };
     }
 
-    const existingMember = await db
-      .select()
-      .from(users)
-      .leftJoin(teamMembers, eq(users.id, teamMembers.userId))
-      .where(
-        and(eq(users.email, email), eq(teamMembers.teamId, userWithTeam.teamId))
-      )
-      .limit(1);
+    const supabase = await createClient();
 
-    if (existingMember.length > 0) {
+    // Check if user is already a member
+    const { data: existingMember } = await supabase
+      .from('team_members')
+      .select('*, profiles!inner(*)')
+      .eq('team_id', userWithTeam.teamId)
+      .single();
+
+    if (existingMember) {
       return { error: 'User is already a member of this team' };
     }
 
     // Check if there's an existing invitation
-    const existingInvitation = await db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.email, email),
-          eq(invitations.teamId, userWithTeam.teamId),
-          eq(invitations.status, 'pending')
-        )
-      )
-      .limit(1);
+    const { data: existingInvitation } = await supabase
+      .from('invitations')
+      .select('*')
+      .eq('email', email)
+      .eq('team_id', userWithTeam.teamId)
+      .eq('status', 'pending')
+      .single();
 
-    if (existingInvitation.length > 0) {
+    if (existingInvitation) {
       return { error: 'An invitation has already been sent to this email' };
     }
 
     // Create a new invitation
-    await db.insert(invitations).values({
-      teamId: userWithTeam.teamId,
+    await supabase.from('invitations').insert({
+      team_id: userWithTeam.teamId,
       email,
       role,
-      invitedBy: user.id,
-      status: 'pending'
+      invited_by: user.id,
+      status: 'pending',
     });
 
     await logActivity(
@@ -452,7 +453,7 @@ export const inviteTeamMember = validatedActionWithUser(
     );
 
     // TODO: Send invitation email and include ?inviteId={id} to sign-up URL
-    // await sendInvitationEmail(email, userWithTeam.team.name, role)
+    // await sendInvitationEmail(email, team.name, role)
 
     return { success: 'Invitation sent successfully' };
   }
