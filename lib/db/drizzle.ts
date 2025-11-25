@@ -5,8 +5,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+type DbInstance = ReturnType<typeof drizzle<typeof schema>>;
+
 let clientInstance: ReturnType<typeof postgres> | undefined;
-let dbInstance: ReturnType<typeof drizzle> | undefined;
+let dbInstance: DbInstance | undefined;
 
 function getClient() {
   if (!clientInstance) {
@@ -31,14 +33,22 @@ export const client = new Proxy({} as ReturnType<typeof postgres>, {
   get: (_, prop) => {
     const actualClient = getClient();
     const value = actualClient[prop as keyof typeof actualClient];
-    return typeof value === 'function' ? value.bind(actualClient) : value;
+    if (typeof value === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (value as any).bind(actualClient);
+    }
+    return value;
   }
 });
 
-export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+export const db = new Proxy({} as DbInstance, {
   get: (_, prop) => {
     const actualDb = getDb();
     const value = actualDb[prop as keyof typeof actualDb];
-    return typeof value === 'function' ? value.bind(actualDb) : value;
+    if (typeof value === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (value as any).bind(actualDb);
+    }
+    return value;
   }
 });
