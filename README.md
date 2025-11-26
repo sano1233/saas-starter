@@ -33,7 +33,7 @@ This project uses **Next.js 15.4.0-canary.47** to leverage experimental features
 - Client Segment Cache
 - Node.js Middleware
 
-**Version Lock**: The Next.js version is intentionally locked to prevent automatic upgrades. Upgrading from canary to stable releases can introduce breaking changes as experimental APIs may be removed or modified. Dependabot is configured to ignore Next.js updates.
+**Version Lock**: The Next.js version is intentionally locked to prevent automatic upgrades. Upgrading from canary to stable releases can introduce breaking changes as experimental APIs may be removed or modified. Dependabot is configured to ignore updates for Next.js, React, and React-DOM.
 
 If you need to upgrade Next.js:
 1. Review the [Next.js release notes](https://github.com/vercel/next.js/releases)
