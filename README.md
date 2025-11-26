@@ -18,11 +18,28 @@ This is a starter template for building a SaaS application using **Next.js** wit
 
 ## Tech Stack
 
-- **Framework**: [Next.js](https://nextjs.org/)
+- **Framework**: [Next.js](https://nextjs.org/) (Canary 15.4.0-canary.47)
 - **Database**: [Postgres](https://www.postgresql.org/)
 - **ORM**: [Drizzle](https://orm.drizzle.team/)
 - **Payments**: [Stripe](https://stripe.com/)
 - **UI Library**: [shadcn/ui](https://ui.shadcn.com/)
+
+## Important Notes
+
+### Next.js Canary Version
+
+This project uses **Next.js 15.4.0-canary.47** to leverage experimental features:
+- Partial Pre-Rendering (PPR)
+- Client Segment Cache
+- Node.js Middleware
+
+**Version Lock**: The Next.js version is intentionally locked to prevent automatic upgrades. Upgrading from canary to stable releases can introduce breaking changes as experimental APIs may be removed or modified. Dependabot is configured to ignore Next.js updates.
+
+If you need to upgrade Next.js:
+1. Review the [Next.js release notes](https://github.com/vercel/next.js/releases)
+2. Check if experimental features are supported in the target version
+3. Update `next.config.ts` to remove any unsupported experimental flags
+4. Test locally before deploying
 
 ## Getting Started
 

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # Ignore Next.js updates to prevent breaking changes from canary -> stable
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # Also ignore React since we're using the canary-compatible version
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
